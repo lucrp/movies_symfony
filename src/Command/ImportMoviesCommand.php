@@ -2,7 +2,10 @@
 
 namespace App\Command;
 
+use App\Entity\Movie;
+use App\Repository\MovieRepository;
 use App\Service\MovieImporter;
+use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -10,19 +13,41 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\Serializer\Encoder\XmlEncoder;
+use Symfony\Component\Serializer\Normalizer\ObjectNormalizer;
+use Symfony\Component\Serializer\Serializer;
 
 #[AsCommand(
     name: 'app:import-movies',
-    description: 'Add a short description for your command',
+    description: 'Import movies from XML file',
 )]
 class ImportMoviesCommand extends Command
 {
+    private EntityManagerInterface $em;
+    private SymfonyStyle $io;
 
-    protected $importer;
+    protected MovieImporter $importer;
+    /**
+     * @var MovieRepository
+     */
+    private $moviesRep;
+    /**
+     * @var string
+     */
+    private string $dataDirectory;
 
-    public function __construct(MovieImporter $importer)
+    public function __construct(
+        EntityManagerInterface $em,
+        MovieImporter $importer,
+        string $dataDirectory,
+        MovieRepository $moviesRep
+        )
     {
+        parent::__construct();
+        $this->em = $em;
+        $this->dataDirectory = $dataDirectory;
         $this->importer = $importer;
+        $this->moviesRep = $moviesRep;
     }
 
     protected function configure(): void
@@ -33,21 +58,82 @@ class ImportMoviesCommand extends Command
         ;
     }
 
+    protected function initialize(InputInterface $input, OutputInterface $output) : void
+    {
+        $this->io = new SymfonyStyle($input, $output);
+    }
+
+    /**
+     * @throws \Doctrine\ORM\NonUniqueResultException
+     */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $io = new SymfonyStyle($input, $output);
-        $arg1 = $input->getArgument('arg1');
-
-        if ($arg1) {
-            $io->note(sprintf('You passed an argument: %s', $arg1));
-        }
-
-        if ($input->getOption('option1')) {
-            // ...
-        }
-
-        $io->success('You have a new command! Now make it your own! Pass --help to see your options.');
+        $this->importMovies();
 
         return Command::SUCCESS;
+    }
+
+
+    private function getDataFromFile(): array
+    {
+        $file = $this->dataDirectory . 'movies.xml';
+
+        $fileExtensions = pathinfo($file, PATHINFO_EXTENSION);
+
+        $normalizers = [
+            new ObjectNormalizer()
+            ];
+
+        $encoders = [
+            new XmlEncoder()
+            ];
+
+        $serializer = new Serializer($normalizers, $encoders);
+
+        /** @var string $fileString */
+        $fileString = file_get_contents($file);
+
+        return $serializer->decode($fileString, $fileExtensions);
+    }
+
+    /**
+     * @throws \Doctrine\ORM\NonUniqueResultException
+     */
+    private function importMovies(): void
+    {
+        $this->io->section('Import movies from XML file');
+        $importedMovies = 0;
+
+        foreach ($this->getDataFromFile() as $row) {
+            if (array_key_exists('id', $row) && !empty($row['id'])) {
+                $movie = $this->moviesRep->findOneBy([
+                    'id' => $row['id']
+                ]);
+
+                if ($movie) {
+                    $movie = new Movie();
+                    $movie->setTitle($row['title'])
+                        ->setGenre($row['genre'])
+                        ->setDescription($row['description'])
+                        ->setRate($row['rate'])
+                        ->setRuntime($row['runtime'])
+                        ->setYear($row['year']);
+
+                    $this->em->persist($movie);
+                    $importedMovies++;
+                }
+            }
+        }
+
+        $this->em->flush();
+
+        if ($importedMovies > 1) {
+            $string = "{$importedMovies} MOVIES IMPORTED TO DATABASE ";
+        } elseif ($importedMovies === 1) {
+            $string = "1 MOVIE IMPORTED TO DATABASE ";
+        } else {
+            $string = 'NO MOVIES WERE IMPORTED';
+        }
+        $this->io->success($string);
     }
 }

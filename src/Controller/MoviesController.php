@@ -18,10 +18,13 @@ class MoviesController extends AbstractController
         ]);
     }
 
-    #[Route('/movies/$id', name: 'movie')]
-    public function getMovie($id)
+    #[Route('/movies/{id}', name: 'movie')]
+    public function getMovie(int $id)
     {
-        
+        return $this->render('movies/index.html.twig', [
+            'controller_name' => 'MoviesController',
+            'movies' => $moviesRep->findOneBy($id),
+        ]);
     }
 
 }
